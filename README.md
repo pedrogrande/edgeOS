@@ -3,7 +3,8 @@
 
 A multi-agent console [Agno](https://agno.com).
 
-
+![EdgeOS home](docs/agno-agentos-home.jpg)
+![EdgeOS agent studio](docs/agno-agentos-agent.jpg)
 
 ## Quick start (Mac)
 
@@ -102,3 +103,6 @@ python edgeos.py
 1. Go to [Ollama Cloud](https://ollama.com/cloud) and create an account.
 2. Create an API key in the dashboard and copy it to your `.env` file as `OLLAMA_API_KEY`.
 
+![Ollama home](docs/Ollama-home.jpg)
+![Ollama Cloud dashboard](docs/Ollama-cloud.jpg)
+![Ollama API Key](docs/Ollama-keys.jpg)
