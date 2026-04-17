@@ -1,7 +1,9 @@
 
 # EdgeOS
 
-A personal AI operating system powered by [Agno](https://agno.com) and Neon Postgres.
+A multi-agent console [Agno](https://agno.com).
+
+
 
 ## Quick start (Mac)
 
@@ -25,8 +27,16 @@ bash setup.sh
 Open the `.env` file that was created and add your values:
 
 ```
-DB_URL=postgresql+psycopg://...   ← your Neon connection string
-OLLAMA_API_KEY=...                 ← your Ollama Cloud key
+DB_URL=postgresql+psycopg://...   ← your Postgresql database connection string [Options below]
+OLLAMA_API_KEY=...                 ← your Ollama Cloud key [Ollama instructions below]
+OPENAI_API_KEY=...                ← [OpenAI key](https://developers.openai.com/) (used for embedding generation in the registry, not for agents' LLM calls by default)
+
+# Optional tool API keys:
+EXA_API_KEY=...                   ← [Exa AI web search](https://exa.ai/)
+LINEAR_API_KEY=...                ← [Linear project management](https://linear.app/docs/api-and-webhooks)
+LINKUP_API_KEY=...                ← [Linkup search](https://www.linkup.so/)
+TAVILY_API_KEY=...                ← [Tavily agent orchestration](https://www.tavily.com/)	
+SERPER_API_KEY=...							  ← [Serper search](https://serper.dev/)
 ```
 
 Get your Neon connection string from [console.neon.tech](https://console.neon.tech).
@@ -84,3 +94,11 @@ cp .env.example .env
 # Run
 python edgeos.py
 ```
+
+---
+
+## Appendix: Setting up Ollama Cloud
+
+1. Go to [Ollama Cloud](https://ollama.com/cloud) and create an account.
+2. Create an API key in the dashboard and copy it to your `.env` file as `OLLAMA_API_KEY`.
+

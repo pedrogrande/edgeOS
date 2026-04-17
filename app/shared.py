@@ -2,28 +2,45 @@
 Shared infrastructure — database, vector store, and knowledge base.
 
 Imported by registry.py and edgeos.py so both reference the same instances.
-Requires DB_URL in the environment (loaded from .env before this module is imported).
+
+Two-tier DB strategy:
+  Local storage  → JsonDb (file-based, zero setup) for sessions, memory, scheduler, agent state
+  DATABASE_URL   → Neon (remote, shared) for knowledge vectors only
+
+Set DATABASE_URL in .env with your Neon connection string.
+Local data is stored in the ./data/ directory.
 """
 
 import os
+from pathlib import Path
 
-from agno.db.postgres import PostgresDb
+from agno.db.json import JsonDb
 from agno.knowledge.knowledge import Knowledge
 from agno.vectordb.pgvector import PgVector
 
-db_url = os.environ.get("DB_URL") or os.environ.get("DATABASE_URL")
-if not db_url:
-    raise RuntimeError(
-        "DB_URL (or DATABASE_URL) is not set. Copy .env.example to .env and fill in your Neon connection string."
-    )
-# Ensure the psycopg3 driver prefix is present
-if db_url.startswith("postgresql://") or db_url.startswith("postgres://"):
-    db_url = db_url.replace("postgres", "postgresql+psycopg", 1)
 
-postgres_db = PostgresDb(db_url=db_url)
+def _normalise(url: str) -> str:
+    """Ensure the psycopg3 driver prefix is present."""
+    if url.startswith("postgresql://") or url.startswith("postgres://"):
+        return url.replace("postgres", "postgresql+psycopg", 1)
+    return url
+
+
+# Local file-based DB — zero setup, stores data in ./data/
+local_data_dir = Path(__file__).parent.parent / "data"
+local_data_dir.mkdir(exist_ok=True)
+postgres_db = JsonDb(path=str(local_data_dir))
+
+# Remote Neon — shared knowledge vectors only
+neon_url = os.environ.get("DATABASE_URL") or os.environ.get("DB_URL")
+if not neon_url:
+    raise RuntimeError(
+        "DATABASE_URL is not set. Copy .env.example to .env and fill in your Neon connection string."
+    )
+neon_url = _normalise(neon_url)
 
 vector_db = PgVector(
-    db_url=db_url,
+    db_url=neon_url,
     table_name="agno_docs",
 )
 
