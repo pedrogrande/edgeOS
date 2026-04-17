@@ -8,8 +8,8 @@ A personal AI operating system powered by [Agno](https://agno.com) and Neon Post
 ### 1. Clone the repo
 
 ```bash
-git clone https://github.com/YOUR_USERNAME/edgeos.git
-cd edgeos
+git clone https://github.com/pedrogrande/edgeOS.git
+cd edgeOS
 ```
 
 ### 2. Run the setup script
@@ -41,6 +41,16 @@ python edgeos.py
 The server starts on **http://localhost:7777**.
 
 ---
+
+### 5. Go to Agno AgentOS
+
+Go to [os.agno.com](https://os.agno.com) and log in with your Agno account (Create an account if you don't already have one). 
+
+Connect EdgeOS to your Agno account using the "Connect AgentOS" button in the sidebar, and enter the URL `http://localhost:7777`.
+
+See video and info here: https://docs.agno.com/agent-os/connect-your-os
+
+Now you can start building agents and teams in the AgentOS Studio!
 
 ## Environment variables
 
