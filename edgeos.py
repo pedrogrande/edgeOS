@@ -21,14 +21,14 @@ from agno.tools.mcp import MCPTools
 
 from app.models import OLLAMA_MODEL_ID
 from app.registry import registry
-from app.shared import knowledge, postgres_db
+from app.shared import knowledge, local_db, neon_db
 
 # Create your agents
 agno_agent = Agent(
     name="Agno Agent",
     model=Ollama(id=OLLAMA_MODEL_ID),
     tools=[MCPTools(transport="streamable-http", url="https://docs.agno.com/mcp")],
-    db=postgres_db,
+    db=local_db,
     update_memory_on_run=True,
     knowledge=knowledge,
     markdown=True,
@@ -40,7 +40,7 @@ simple_agent = Agent(
     id="simple_agent",
     model=Ollama(id=OLLAMA_MODEL_ID),
     instructions=["You are a simple agent"],
-    db=postgres_db,
+    db=local_db,
     update_memory_on_run=True,
 )
 
@@ -51,7 +51,7 @@ research_agent = Agent(
     model=Ollama(id=OLLAMA_MODEL_ID),
     instructions=["You are a research agent"],
     tools=[HackerNewsTools()],
-    db=postgres_db,
+    db=local_db,
     update_memory_on_run=True,
 )
 
@@ -65,7 +65,7 @@ research_team = Team(
     instructions=[
         "You are the lead researcher of a research team! 🔍",
     ],
-    db=postgres_db,
+    db=local_db,
     update_memory_on_run=True,
     add_datetime_to_context=True,
     markdown=True,
@@ -78,7 +78,7 @@ agent_os = AgentOS(
     agents=[agno_agent],
     teams=[research_team],
     registry=registry,
-    db=postgres_db,
+    db=neon_db,
     enable_mcp_server=True,
 )
 app = agent_os.get_app()

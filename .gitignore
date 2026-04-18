@@ -3,6 +3,9 @@
 .env.*
 !.env.example
 
+# Local SQLite database (per-user, not shared)
+edgeos.db
+
 # Python
 __pycache__/
 *.py[cod]
@@ -53,4 +56,3 @@ logs/
 
 # Output directories
 charts/
-data/

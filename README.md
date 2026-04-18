@@ -27,7 +27,7 @@ bash setup.sh
 
 Open the `.env` file that was created and add your values:
 
-```
+
 DB_URL=postgresql+psycopg://...   ← your Postgresql database connection string [Options below]
 OLLAMA_API_KEY=...                 ← your Ollama Cloud key [Ollama instructions below]
 OPENAI_API_KEY=...                ← [OpenAI key](https://developers.openai.com/) (used for embedding generation in the registry, not for agents' LLM calls by default)
@@ -38,7 +38,7 @@ LINEAR_API_KEY=...                ← [Linear project management](https://linear
 LINKUP_API_KEY=...                ← [Linkup search](https://www.linkup.so/)
 TAVILY_API_KEY=...                ← [Tavily agent orchestration](https://www.tavily.com/)	
 SERPER_API_KEY=...							  ← [Serper search](https://serper.dev/)
-```
+
 
 Get your Neon connection string from [console.neon.tech](https://console.neon.tech).
 

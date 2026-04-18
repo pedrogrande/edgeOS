@@ -25,7 +25,7 @@ from agno.tools.webbrowser import WebBrowserTools
 from agno.tools.webtools import WebTools
 from agno.tools.linear import LinearTools
 
-from app.shared import knowledge, postgres_db, vector_db
+from app.shared import knowledge, local_db, neon_db, vector_db
 from app.models import (
     OLLAMA_GLM5_MODEL_ID,
     OLLAMA_MINIMAX_MODEL_ID,
@@ -42,7 +42,7 @@ _tools = [
     # Reasoning & memory
     ReasoningTools(),
     KnowledgeTools(knowledge=knowledge),
-    MemoryTools(db=postgres_db),
+    MemoryTools(db=local_db),
     # Data & files
     CsvTools(),
     FileGenerationTools(),
@@ -51,7 +51,7 @@ _tools = [
     # Visualization
     VisualizationTools(output_dir="charts"),
     # Workflow control
-    SchedulerTools(db=postgres_db),
+    SchedulerTools(db=local_db),
     SleepTools(),
 ]
 
@@ -62,8 +62,6 @@ if os.getenv("EXA_API_KEY"):
     _tools.append(ExaTools())
 
 if os.getenv("LINEAR_API_KEY"):
-    from agno.tools.linear import LinearTools
-
     _tools.append(LinearTools())
 
 if os.getenv("LINKUP_API_KEY"):
@@ -99,6 +97,6 @@ registry = Registry(
         Ollama(id=OLLAMA_QWEN_MODEL_ID),
         Ollama(id=OLLAMA_GLM5_MODEL_ID),
     ],
-    dbs=[postgres_db],
+    dbs=[local_db, neon_db],
     vector_dbs=[vector_db],
 )
