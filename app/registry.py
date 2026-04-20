@@ -88,6 +88,13 @@ if os.getenv("AGNO_EDGEOS_MCP_URL"):
     _agno_edgeos_tools.name = "agno-edgeos"
     _tools.append(_agno_edgeos_tools)
 
+if os.getenv("BASEROW_MCP_URL"):
+    from agno.tools.mcp import MCPTools
+
+    _baserow_tools = MCPTools(url=os.getenv("BASEROW_MCP_URL"), transport="sse")
+    _baserow_tools.name = "baserow"
+    _tools.append(_baserow_tools)
+
 registry = Registry(
     name="EdgeOS Registry",
     tools=_tools,

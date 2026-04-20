@@ -56,3 +56,9 @@ logs/
 
 # Output directories
 charts/
+
+# Local PostgreSQL data (Docker volume mount)
+data/postgres/
+
+# Scripts are tracked, but runtime data is not
+scripts/*.log

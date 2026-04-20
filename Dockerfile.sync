@@ -1,0 +1,18 @@
+FROM python:3.12-slim
+
+WORKDIR /app
+
+# Install libpq for psycopg binary
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    libpq-dev gcc \
+    && rm -rf /var/lib/apt/lists/*
+
+# Install Python dependencies
+COPY requirements.txt .
+RUN pip install --no-cache-dir psycopg[binary] python-dotenv sqlalchemy
+
+# Copy sync script and shared app code
+COPY scripts/sync-to-neon.py .
+COPY app/ ./app/
+
+ENTRYPOINT ["python", "sync-to-neon.py"]
