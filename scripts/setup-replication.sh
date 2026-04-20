@@ -68,28 +68,52 @@ NEON_DB_URL="${DB_URL}"
 NEON_PSQL_URL=$(echo "$NEON_DB_URL" | sed 's|+psycopg://|://|' | sed 's/&channel_binding=[^&]*//g' | sed 's/?channel_binding=[^&]*&/?/g' | sed 's/?channel_binding=[^&]*$//g')
 
 # ── Agno tables to replicate ────────────────────────────────────────────────
+# These are the tables we WANT to replicate. The actual table list for each
+# PUBLICATION is built dynamically by intersecting with tables that exist
+# on each side — this avoids "relation does not exist" errors.
 AGNO_TABLES=(
-    "ai.agno_sessions"
-    "ai.agno_memories"
-    "ai.agno_knowledge"
-    "ai.agno_docs"
-    "ai.agno_components"
-    "ai.agno_component_configs"
-    "ai.agno_component_links"
-    "ai.agno_approvals"
-    "ai.agno_eval_runs"
-    "ai.agno_learnings"
-    "ai.agno_metrics"
-    "ai.agno_schedules"
-    "ai.agno_schedule_runs"
-    "ai.agno_schema_versions"
-    "ai.agno_assist_knowledge_contents"
-    "ai.agno_assist_knowledge_vectors"
-    "ai.knowledge_vectors"
+    "agno_sessions"
+    "agno_memories"
+    "agno_knowledge"
+    "agno_docs"
+    "agno_components"
+    "agno_component_configs"
+    "agno_component_links"
+    "agno_approvals"
+    "agno_eval_runs"
+    "agno_learnings"
+    "agno_metrics"
+    "agno_schedules"
+    "agno_schedule_runs"
+    "agno_schema_versions"
+    "agno_assist_knowledge_contents"
+    "agno_assist_knowledge_vectors"
+    "knowledge_vectors"
 )
 
-# Build comma-separated table list for PUBLICATION
-TABLE_LIST=$(IFS=','; echo "${AGNO_TABLES[*]}")
+# Build a comma-separated table list for PUBLICATION from tables that exist
+# in the ai schema on a given side. Args: "local" or "neon"
+build_table_list() {
+    local side="$1"
+    local existing=""
+    for table in "${AGNO_TABLES[@]}"; do
+        local count=0
+        if [ "$side" = "local" ]; then
+            count=$(local_psql_scalar "SELECT COUNT(*) FROM information_schema.tables WHERE table_schema='ai' AND table_name='${table}';") || count=0
+        else
+            count=$(neon_psql_scalar "SELECT COUNT(*) FROM information_schema.tables WHERE table_schema='ai' AND table_name='${table}';") || count=0
+        fi
+        # Ensure count is a valid number (guard against empty/non-numeric output)
+        if [[ "$count" =~ ^[0-9]+$ ]] && [ "$count" -gt 0 ]; then
+            if [ -n "$existing" ]; then
+                existing="${existing},ai.${table}"
+            else
+                existing="ai.${table}"
+            fi
+        fi
+    done
+    echo "$existing"
+}
 
 # ── Helper functions ─────────────────────────────────────────────────────────
 local_psql() {
@@ -97,8 +121,18 @@ local_psql() {
         -U "$LOCAL_PG_USER" -d "$LOCAL_PG_DATABASE" -c "$1"
 }
 
+# Returns a single scalar value (no headers, no parentheses)
+local_psql_scalar() {
+    PGPASSWORD="$LOCAL_PG_PASSWORD" psql -h "$LOCAL_PG_HOST" -p "$LOCAL_PG_PORT" \
+        -U "$LOCAL_PG_USER" -d "$LOCAL_PG_DATABASE" -t -A -c "$1" 2>/dev/null | head -1 | tr -d ' \n'
+}
+
 neon_psql() {
     psql "$NEON_PSQL_URL" -c "$1"
+}
+
+neon_psql_scalar() {
+    psql "$NEON_PSQL_URL" -t -A -c "$1" 2>/dev/null | head -1 | tr -d ' \n'
 }
 
 check_status() {
@@ -112,7 +146,7 @@ check_status() {
     local_psql "SELECT pubname, puballtables FROM pg_publication;" 2>/dev/null || echo "  (no publications)"
     echo ""
     echo "Subscriptions:"
-    local_psql "SELECT subname, status, received_lsn, latest_end_lsn FROM pg_stat_subscription;" 2>/dev/null || echo "  (no subscriptions)"
+    local_psql "SELECT subname, received_lsn, latest_end_lsn FROM pg_stat_subscription;" 2>/dev/null || echo "  (no subscriptions)"
     echo ""
     echo "Replication slots:"
     local_psql "SELECT slot_name, slot_type, active FROM pg_replication_slots;" 2>/dev/null || echo "  (no slots)"
@@ -196,6 +230,24 @@ neon_psql "GRANT SELECT ON ALL TABLES IN SCHEMA ai TO ${NEON_REPL_USER};" 2>/dev
 neon_psql "ALTER DEFAULT PRIVILEGES IN SCHEMA ai GRANT SELECT ON TABLES TO ${NEON_REPL_USER};" 2>/dev/null || true
 echo -e "${GREEN}✓ Neon replication role configured${NC}"
 
+# ── Check if replication is already set up ────────────────────────────────────
+# If the subscription already exists and is healthy, skip Steps 2-4 to avoid
+# disrupting an active replication connection (dropping publications breaks
+# the subscription, and recreating the subscription has a race condition).
+EXISTING_SUB=$(local_psql_scalar "SELECT COUNT(*) FROM pg_subscription WHERE subname = 'sub_from_neon';") || EXISTING_SUB=0
+SKIP_REPLICATION="false"
+
+if [[ "$EXISTING_SUB" =~ ^[0-9]+$ ]] && [ "$EXISTING_SUB" -gt 0 ]; then
+    # Subscription exists — skip recreation to avoid disruption
+    echo -e "${GREEN}✓ Subscription 'sub_from_neon' already exists${NC}"
+    echo "  Skipping publication/subscription recreation to avoid disruption."
+    echo "  To force recreate, drop the subscription first:"
+    echo "    psql -h localhost -p 5433 -U edgeos -d edgeos -c \"DROP SUBSCRIPTION sub_from_neon;\""
+    SKIP_REPLICATION="true"
+fi
+
+if [ "$SKIP_REPLICATION" = "false" ]; then
+
 # ── Step 2: Create publication on Neon ───────────────────────────────────────
 echo ""
 echo -e "${YELLOW}Step 2: Create publication on Neon...${NC}"
@@ -203,23 +255,25 @@ echo -e "${YELLOW}Step 2: Create publication on Neon...${NC}"
 # Drop existing publication if it exists (idempotent)
 neon_psql "DROP PUBLICATION IF EXISTS neon_pub;" 2>/dev/null || true
 
-# Check if any tables exist in the ai schema on Neon
-NEON_TABLE_COUNT=$(neon_psql "SELECT COUNT(*) FROM information_schema.tables WHERE table_schema = 'ai';" 2>/dev/null | tr -d ' ')
+# Build table list from tables that actually exist on Neon
+NEON_TABLE_LIST=$(build_table_list "neon")
+NEON_TABLE_COUNT=$(neon_psql_scalar "SELECT COUNT(*) FROM information_schema.tables WHERE table_schema = 'ai';") || NEON_TABLE_COUNT=0
 
-if [ "$NEON_TABLE_COUNT" -gt 0 ] 2>/dev/null; then
-    # Tables exist — create per-table publication
-    neon_psql "CREATE PUBLICATION neon_pub FOR TABLE ${TABLE_LIST};" 2>/dev/null
-    if [ $? -ne 0 ]; then
-        # Some tables may not exist yet — fall back to schema-level publication
-        echo -e "${YELLOW}⚠  Some tables not found, using schema-level publication${NC}"
+if [ -n "$NEON_TABLE_LIST" ] && [[ "$NEON_TABLE_COUNT" =~ ^[0-9]+$ ]] && [ "$NEON_TABLE_COUNT" -gt 0 ]; then
+    # Tables exist — create per-table publication (only tables that exist)
+    if neon_psql "CREATE PUBLICATION neon_pub FOR TABLE ${NEON_TABLE_LIST};" 2>/dev/null; then
+        echo -e "${GREEN}✓ Neon publication 'neon_pub' created (per-table)${NC}"
+    else
+        # Fallback to schema-level publication
+        echo -e "${YELLOW}⚠  Per-table publication failed, using schema-level publication${NC}"
         neon_psql "DROP PUBLICATION IF EXISTS neon_pub;" 2>/dev/null || true
-        neon_psql "CREATE PUBLICATION neon_pub FOR TABLES IN SCHEMA ai;"
+        neon_psql "CREATE PUBLICATION neon_pub FOR TABLES IN SCHEMA ai;" 2>/dev/null || true
+        echo -e "${GREEN}✓ Neon publication 'neon_pub' created (schema-level)${NC}"
     fi
-    echo -e "${GREEN}✓ Neon publication 'neon_pub' created${NC}"
 else
     # No tables yet — use schema-level publication (will cover all future tables)
     echo -e "${YELLOW}⚠  No tables in ai schema yet — using schema-level publication${NC}"
-    neon_psql "CREATE PUBLICATION neon_pub FOR TABLES IN SCHEMA ai;"
+    neon_psql "CREATE PUBLICATION neon_pub FOR TABLES IN SCHEMA ai;" 2>/dev/null || true
     echo -e "${GREEN}✓ Neon publication 'neon_pub' created (schema-level)${NC}"
     echo -e "${YELLOW}   Note: Schema-level publications cannot have tables added/removed later.${NC}"
     echo -e "${YELLOW}   Run EdgeOS once to create tables, then re-run this script for per-table publication.${NC}"
@@ -237,22 +291,25 @@ local_psql "ALTER DEFAULT PRIVILEGES IN SCHEMA ai GRANT SELECT ON TABLES TO ${LO
 # Drop and recreate publication
 local_psql "DROP PUBLICATION IF EXISTS local_pub;" 2>/dev/null || true
 
-# Check if any tables exist in the ai schema locally
-LOCAL_TABLE_COUNT=$(local_psql "SELECT COUNT(*) FROM information_schema.tables WHERE table_schema = 'ai';" 2>/dev/null | tr -d ' ')
+# Build table list from tables that actually exist locally
+LOCAL_TABLE_LIST=$(build_table_list "local")
+LOCAL_TABLE_COUNT=$(local_psql_scalar "SELECT COUNT(*) FROM information_schema.tables WHERE table_schema = 'ai';") || LOCAL_TABLE_COUNT=0
 
-if [ "$LOCAL_TABLE_COUNT" -gt 0 ] 2>/dev/null; then
-    # Tables exist — create per-table publication
-    local_psql "CREATE PUBLICATION local_pub FOR TABLE ${TABLE_LIST};" 2>/dev/null
-    if [ $? -ne 0 ]; then
-        echo -e "${YELLOW}⚠  Some tables not found locally, using schema-level publication${NC}"
+if [ -n "$LOCAL_TABLE_LIST" ] && [[ "$LOCAL_TABLE_COUNT" =~ ^[0-9]+$ ]] && [ "$LOCAL_TABLE_COUNT" -gt 0 ]; then
+    # Tables exist — create per-table publication (only tables that exist)
+    if local_psql "CREATE PUBLICATION local_pub FOR TABLE ${LOCAL_TABLE_LIST};" 2>/dev/null; then
+        echo -e "${GREEN}✓ Local publication 'local_pub' created (per-table)${NC}"
+    else
+        # Fallback to schema-level publication
+        echo -e "${YELLOW}⚠  Per-table publication failed, using schema-level publication${NC}"
         local_psql "DROP PUBLICATION IF EXISTS local_pub;" 2>/dev/null || true
-        local_psql "CREATE PUBLICATION local_pub FOR TABLES IN SCHEMA ai;"
+        local_psql "CREATE PUBLICATION local_pub FOR TABLES IN SCHEMA ai;" 2>/dev/null || true
+        echo -e "${GREEN}✓ Local publication 'local_pub' created (schema-level)${NC}"
     fi
-    echo -e "${GREEN}✓ Local publication 'local_pub' created${NC}"
 else
     # No tables yet — use schema-level publication
     echo -e "${YELLOW}⚠  No tables in ai schema yet — using schema-level publication${NC}"
-    local_psql "CREATE PUBLICATION local_pub FOR TABLES IN SCHEMA ai;"
+    local_psql "CREATE PUBLICATION local_pub FOR TABLES IN SCHEMA ai;" 2>/dev/null || true
     echo -e "${GREEN}✓ Local publication 'local_pub' created (schema-level)${NC}"
 fi
 
@@ -270,9 +327,82 @@ NEON_DBNAME=$(echo "$NEON_PSQL_URL" | sed -n 's|.*/\([^?]*\).*|\1|p')
 # Build subscription connection string
 SUB_CONN="postgresql://${NEON_REPL_USER}:${NEON_REPL_PASSWORD}@${NEON_HOST}:${NEON_PORT:-5432}/${NEON_DBNAME}?sslmode=require"
 
+# Check that local tables exist before creating subscription
+# If Neon has tables but local doesn't, CREATE SUBSCRIPTION with copy_data=true
+# will fail because it tries to replicate into non-existent tables.
+LOCAL_TABLE_COUNT=$(local_psql_scalar "SELECT COUNT(*) FROM information_schema.tables WHERE table_schema = 'ai';") || LOCAL_TABLE_COUNT=0
+
+if [[ "$LOCAL_TABLE_COUNT" =~ ^[0-9]+$ ]] && [ "$LOCAL_TABLE_COUNT" -eq 0 ]; then
+    echo -e "${YELLOW}⚠  No tables in local ai schema yet!${NC}"
+    echo ""
+    echo "  The subscription needs matching tables on both sides."
+    echo "  Run the migration first:  python scripts/migrate-local-db.py"
+    echo "  Then re-run this script."
+    echo ""
+    echo -e "${YELLOW}  Creating subscription with copy_data=false (existing Neon data won't be copied)${NC}"
+    COPY_DATA="false"
+else
+    # Check if all Agno tables exist locally
+    MISSING_TABLES=""
+    for table in "${AGNO_TABLES[@]}"; do
+        EXISTS=$(local_psql_scalar "SELECT COUNT(*) FROM information_schema.tables WHERE table_schema='ai' AND table_name='${table}';") || EXISTS=0 || EXISTS=0
+        if [[ "$EXISTS" =~ ^[0-9]+$ ]] && [ "$EXISTS" -eq 0 ]; then
+            MISSING_TABLES="${MISSING_TABLES} ai.${table}"
+        fi
+    done
+
+    if [ -n "$MISSING_TABLES" ]; then
+        echo -e "${YELLOW}⚠  Some Agno tables missing locally:${MISSING_TABLES}${NC}"
+        echo -e "${YELLOW}  Creating subscription with copy_data=false to avoid errors.${NC}"
+        echo -e "${YELLOW}  Run 'python scripts/migrate-local-db.py' then re-run this script for full sync.${NC}"
+        COPY_DATA="false"
+    else
+        COPY_DATA="true"
+    fi
+fi
+
+# Drop existing subscription (with wait for cleanup)
 local_psql "DROP SUBSCRIPTION IF EXISTS sub_from_neon;" 2>/dev/null || true
-local_psql "CREATE SUBSCRIPTION sub_from_neon CONNECTION '${SUB_CONN}' PUBLICATION neon_pub WITH (origin = none);"
-echo -e "${GREEN}✓ Local subscription 'sub_from_neon' created${NC}"
+
+# Wait for the replication slot to be cleaned up on the publisher
+# Without this pause, CREATE SUBSCRIPTION can fail with "relation does not exist"
+# because the old slot is still being released
+echo -e "${YELLOW}▸ Waiting for replication slot cleanup...${NC}"
+sleep 3
+
+# Retry CREATE SUBSCRIPTION up to 3 times (Neon slot cleanup can be slow)
+MAX_RETRIES=3
+RETRY_COUNT=0
+SUB_CREATED=false
+
+while [ $RETRY_COUNT -lt $MAX_RETRIES ]; do
+    RETRY_COUNT=$((RETRY_COUNT + 1))
+    if local_psql "CREATE SUBSCRIPTION sub_from_neon CONNECTION '${SUB_CONN}' PUBLICATION neon_pub WITH (origin = none, copy_data = ${COPY_DATA});" 2>/dev/null; then
+        SUB_CREATED=true
+        break
+    else
+        if [ $RETRY_COUNT -lt $MAX_RETRIES ]; then
+            echo -e "${YELLOW}⚠  CREATE SUBSCRIPTION failed (attempt $RETRY_COUNT/$MAX_RETRIES), retrying in 5s...${NC}"
+            sleep 5
+        fi
+    fi
+done
+
+if [ "$SUB_CREATED" = "true" ]; then
+    if [ "$COPY_DATA" = "true" ]; then
+        echo -e "${GREEN}✓ Local subscription 'sub_from_neon' created (with data copy from Neon)${NC}"
+    else
+        echo -e "${GREEN}✓ Local subscription 'sub_from_neon' created (copy_data=false — only new changes will replicate)${NC}"
+        echo -e "${YELLOW}  Run 'python scripts/migrate-local-db.py' to create tables, then re-run this script.${NC}"
+    fi
+else
+    echo -e "${RED}✗ Failed to create subscription after $MAX_RETRIES attempts${NC}"
+    echo -e "${YELLOW}  This is usually caused by a stale replication slot on Neon.${NC}"
+    echo "  Try again in 30 seconds, or drop the slot manually on Neon:"
+    echo "    psql \$(echo \$DB_URL | sed 's|+psycopg://|://|') -c \"SELECT pg_drop_replication_slot('sub_from_neon');\""
+fi
+
+fi # end of SKIP_REPLICATION block
 
 # ── Step 5: Local → Neon direction (pull-based sync) ────────────────────────
 echo ""

@@ -19,6 +19,5 @@ wikipedia
 python-dotenv
 linear-python
 linkup-sdk
-tavily-sdk
 serper-sdk
 fastmcp
